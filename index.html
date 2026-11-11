@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Covoiturage</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="covoiturage.css">
+</head>
+<body>
+  <h1>🚗 Covoiturage</h1>
+
+  <div class="form">
+    <input id="nom" placeholder="Ton nom (ex: Ahmed)">
+    <input id="tel" type="tel" placeholder="Téléphone (ex: 22 123 456)">
+    <input id="depart" placeholder="Départ (ex: Tunis)">
+    <input id="destination" placeholder="Destination (ex: Sfax)">
+    <input id="date" type="date">
+    <input id="places" type="number" min="1" placeholder="Nombre de places">
+    <input id="prix" type="number" min="0" placeholder="Prix (DT)">
+    <button id="publier">Publier le trajet</button>
+  </div>
+
+  <h2>Trajets disponibles</h2>
+  <div class="recherche">
+    <input id="rechDepart" placeholder="🔍 Filtrer par départ">
+    <input id="rechDest" placeholder="🔍 Filtrer par destination">
+  </div>
+  <div id="trajets"></div>
+
+  <script>
+    const trajetsDiv = document.getElementById("trajets");
+    const rechDepart = document.getElementById("rechDepart");
+    const rechDest = document.getElementById("rechDest");
+    let trajets = JSON.parse(localStorage.getItem("trajets")) || [];
+
+    function jour(d) {
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const j = String(d.getDate()).padStart(2, "0");
+      return d.getFullYear() + "-" + m + "-" + j;
+    }
+
+    document.getElementById("date").min = jour(new Date());
+
+    function sauvegarder() {
+      localStorage.setItem("trajets", JSON.stringify(trajets));
+    }
+
+    function ligne(texte, gras) {
+      const d = document.createElement("div");
+      d.textContent = texte;
+      if (gras) d.style.fontWeight = "bold";
+      return d;
+    }
+
+    function afficher() {
+      const aujourdhui = jour(new Date());
+      const fd = rechDepart.value.trim().toLowerCase();
+      const ft = rechDest.value.trim().toLowerCase();
+      trajetsDiv.innerHTML = "";
+
+      const visibles = trajets
+        .filter(function (t) {
+          return t.date >= aujourdhui &&
+            t.depart.toLowerCase().includes(fd) &&
+            t.destination.toLowerCase().includes(ft);
+        })
+        .sort(function (a, b) {
+          return a.date < b.date ? -1 : a.date > b.date ? 1 : 0;
+        });
+
+      visibles.forEach(function (t) {
+        const carte = document.createElement("div");
+        carte.className = "carte";
+
+        const infos = document.createElement("div");
+        infos.appendChild(ligne(t.depart + " → " + t.destination, true));
+        if (t.nom) infos.appendChild(ligne("👤 " + t.nom));
+        infos.appendChild(ligne("📅 " + t.date));
+        infos.appendChild(ligne("💺 " + t.places + " place(s) · 💰 " + t.prix + " DT"));
+
+        const actions = document.createElement("div");
+        actions.className = "actions";
+
+        const res = document.createElement("button");
+        res.className = "reserver";
+        if (t.places > 0) {
+          res.textContent = "Réserver";
+          res.onclick = function () {
+            t.places--;
+            sauvegarder();
+            afficher();
+          };
+        } else {
+          res.textContent = "Complet";
+          res.disabled = true;
+        }
+        actions.appendChild(res);
+
+        if (t.tel) {
+          const appel = document.createElement("a");
+          appel.className = "appeler";
+          appel.textContent = "📞 Appeler";
+          appel.href = "tel:" + t.tel.replace(/[^\d+]/g, "");
+          actions.appendChild(appel);
+        }
+
+        const del = document.createElement("button");
+        del.textContent = "❌";
+        del.className = "suppr";
+        del.onclick = function () {
+          trajets = trajets.filter(function (x) { return x !== t; });
+          sauvegarder();
+          afficher();
+        };
+        actions.appendChild(del);
+
+        carte.appendChild(infos);
+        carte.appendChild(actions);
+        trajetsDiv.appendChild(carte);
+      });
+
+      if (visibles.length === 0) {
+        trajetsDiv.textContent = "Aucun trajet trouvé.";
+      }
+    }
+
+    document.getElementById("publier").onclick = function () {
+      const nom = document.getElementById("nom").value.trim();
+      const tel = document.getElementById("tel").value.trim();
+      const depart = document.getElementById("depart").value.trim();
+      const destination = document.getElementById("destination").value.trim();
+      const date = document.getElementById("date").value;
+      const places = document.getElementById("places").value;
+      const prix = document.getElementById("prix").value;
+
+      if (!nom || !tel || !depart || !destination || !date || !places || !prix) {
+        alert("Lazem tعammer kol el khanat");
+        return;
+      }
+
+      if (date < jour(new Date())) {
+        alert("El date lazem tكون lyoum wala baad");
+        return;
+      }
+
+      trajets.push({
+        nom: nom,
+        tel: tel,
+        depart: depart,
+        destination: destination,
+        date: date,
+        places: Number(places),
+        prix: Number(prix)
+      });
+      sauvegarder();
+      afficher();
+
+      document.querySelectorAll(".form input").forEach(function (el) {
+        el.value = "";
+      });
+    };
+
+    rechDepart.oninput = afficher;
+    rechDest.oninput = afficher;
+
+    afficher();
+  </script>
+</body>
+</html>
