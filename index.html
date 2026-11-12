@@ -1,9 +1,10 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="fr" translate="no">
 <head>
   <meta charset="UTF-8">
   <title>Covoiturage</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="google" content="notranslate">
   <link rel="stylesheet" href="covoiturage.css">
 </head>
 <body>
@@ -25,13 +26,32 @@
     <input id="rechDepart" placeholder="🔍 Filtrer par départ">
     <input id="rechDest" placeholder="🔍 Filtrer par destination">
   </div>
-  <div id="trajets"></div>
+  <div id="trajets">Chargement...</div>
 
-  <script>
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/13.3.0/firebase-app.js";
+    import {
+      getFirestore, collection, addDoc, doc,
+      deleteDoc, onSnapshot, runTransaction
+    } from "https://www.gstatic.com/firebasejs/13.3.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyA4jBlWQgdOxKaUhaH4ZkEOqBXSxdi545I",
+      authDomain: "covoiturage-10480.firebaseapp.com",
+      projectId: "covoiturage-10480",
+      storageBucket: "covoiturage-10480.firebasestorage.app",
+      messagingSenderId: "981570743228",
+      appId: "1:981570743228:web:79ada79a4b3c568eb7d9b9"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const trajetsRef = collection(db, "trajets");
+
     const trajetsDiv = document.getElementById("trajets");
     const rechDepart = document.getElementById("rechDepart");
     const rechDest = document.getElementById("rechDest");
-    let trajets = JSON.parse(localStorage.getItem("trajets")) || [];
+    let trajets = [];
 
     function jour(d) {
       const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -40,10 +60,6 @@
     }
 
     document.getElementById("date").min = jour(new Date());
-
-    function sauvegarder() {
-      localStorage.setItem("trajets", JSON.stringify(trajets));
-    }
 
     function ligne(texte, gras) {
       const d = document.createElement("div");
@@ -61,8 +77,8 @@
       const visibles = trajets
         .filter(function (t) {
           return t.date >= aujourdhui &&
-            t.depart.toLowerCase().includes(fd) &&
-            t.destination.toLowerCase().includes(ft);
+            String(t.depart).toLowerCase().includes(fd) &&
+            String(t.destination).toLowerCase().includes(ft);
         })
         .sort(function (a, b) {
           return a.date < b.date ? -1 : a.date > b.date ? 1 : 0;
@@ -85,10 +101,18 @@
         res.className = "reserver";
         if (t.places > 0) {
           res.textContent = "Réserver";
-          res.onclick = function () {
-            t.places--;
-            sauvegarder();
-            afficher();
+          res.onclick = async function () {
+            try {
+              await runTransaction(db, async function (tx) {
+                const ref = doc(db, "trajets", t.id);
+                const snap = await tx.get(ref);
+                if (!snap.exists()) return;
+                const p = snap.data().places;
+                if (p > 0) tx.update(ref, { places: p - 1 });
+              });
+            } catch (e) {
+              alert("Erreur: " + e.message);
+            }
           };
         } else {
           res.textContent = "Complet";
@@ -100,17 +124,20 @@
           const appel = document.createElement("a");
           appel.className = "appeler";
           appel.textContent = "📞 Appeler";
-          appel.href = "tel:" + t.tel.replace(/[^\d+]/g, "");
+          appel.href = "tel:" + String(t.tel).replace(/[^\d+]/g, "");
           actions.appendChild(appel);
         }
 
         const del = document.createElement("button");
         del.textContent = "❌";
         del.className = "suppr";
-        del.onclick = function () {
-          trajets = trajets.filter(function (x) { return x !== t; });
-          sauvegarder();
-          afficher();
+        del.onclick = async function () {
+          if (!confirm("Supprimer ce trajet ?")) return;
+          try {
+            await deleteDoc(doc(db, "trajets", t.id));
+          } catch (e) {
+            alert("Erreur: " + e.message);
+          }
         };
         actions.appendChild(del);
 
@@ -124,7 +151,20 @@
       }
     }
 
-    document.getElementById("publier").onclick = function () {
+    onSnapshot(
+      trajetsRef,
+      function (snap) {
+        trajets = snap.docs.map(function (d) {
+          return Object.assign({ id: d.id }, d.data());
+        });
+        afficher();
+      },
+      function (err) {
+        trajetsDiv.textContent = "Erreur de connexion: " + err.message;
+      }
+    );
+
+    document.getElementById("publier").onclick = async function () {
       const nom = document.getElementById("nom").value.trim();
       const tel = document.getElementById("tel").value.trim();
       const depart = document.getElementById("depart").value.trim();
@@ -143,27 +183,26 @@
         return;
       }
 
-      trajets.push({
-        nom: nom,
-        tel: tel,
-        depart: depart,
-        destination: destination,
-        date: date,
-        places: Number(places),
-        prix: Number(prix)
-      });
-      sauvegarder();
-      afficher();
-
-      document.querySelectorAll(".form input").forEach(function (el) {
-        el.value = "";
-      });
+      try {
+        await addDoc(trajetsRef, {
+          nom: nom,
+          tel: tel,
+          depart: depart,
+          destination: destination,
+          date: date,
+          places: Number(places),
+          prix: Number(prix)
+        });
+        document.querySelectorAll(".form input").forEach(function (el) {
+          el.value = "";
+        });
+      } catch (e) {
+        alert("Erreur: " + e.message);
+      }
     };
 
     rechDepart.oninput = afficher;
     rechDest.oninput = afficher;
-
-    afficher();
   </script>
 </body>
 </html>
