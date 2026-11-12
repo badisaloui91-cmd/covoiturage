@@ -10,28 +10,62 @@
 <body>
   <h1>🚗 Covoiturage</h1>
 
-  <div class="form">
-    <input id="nom" placeholder="Ton nom (ex: Ahmed)">
-    <input id="tel" type="tel" placeholder="Téléphone (ex: 22 123 456)">
-    <input id="depart" placeholder="Départ (ex: Tunis)">
-    <input id="destination" placeholder="Destination (ex: Sfax)">
-    <input id="date" type="date">
-    <input id="places" type="number" min="1" placeholder="Nombre de places">
-    <input id="prix" type="number" min="0" placeholder="Prix (DT)">
-    <button id="publier">Publier le trajet</button>
-  </div>
+  <div id="chargement" class="msg">Chargement...</div>
 
-  <h2>Trajets disponibles</h2>
-  <div class="recherche">
-    <input id="rechDepart" placeholder="🔍 Filtrer par départ">
-    <input id="rechDest" placeholder="🔍 Filtrer par destination">
-  </div>
-  <div id="trajets">Chargement...</div>
+  <section id="vueAuth" hidden>
+    <div class="form">
+      <div class="onglets">
+        <button type="button" id="ongConnexion" class="onglet actif">Connexion</button>
+        <button type="button" id="ongInscription" class="onglet">Inscription</button>
+      </div>
+
+      <div id="blocInscription" hidden>
+        <div class="roles">
+          <button type="button" class="role actif" data-role="passager">🧳 Passager<small>Je cherche un trajet</small></button>
+          <button type="button" class="role" data-role="conducteur">🚗 Conducteur<small>Je propose un trajet</small></button>
+        </div>
+        <input id="inNom" placeholder="Ton nom (ex: Ahmed)">
+        <input id="inTel" type="tel" placeholder="Téléphone (ex: 22 123 456)">
+      </div>
+
+      <input id="inEmail" type="email" placeholder="Email">
+      <input id="inMdp" type="password" placeholder="Mot de passe (6 caractères min)">
+      <button type="button" id="btnAuth">Se connecter</button>
+      <div id="msgAuth" class="msg"></div>
+    </div>
+  </section>
+
+  <section id="vueApp" hidden>
+    <div class="barre">
+      <span id="salut"></span>
+      <button type="button" id="btnDeconnexion">Déconnexion</button>
+    </div>
+
+    <div class="form" id="formTrajet" hidden>
+      <input id="depart" placeholder="Départ (ex: Tunis)">
+      <input id="destination" placeholder="Destination (ex: Sfax)">
+      <input id="date" type="date">
+      <input id="places" type="number" min="1" placeholder="Nombre de places">
+      <input id="prix" type="number" min="0" placeholder="Prix (DT)">
+      <button type="button" id="publier">Publier le trajet</button>
+    </div>
+
+    <h2>Trajets disponibles</h2>
+    <div class="recherche">
+      <input id="rechDepart" placeholder="🔍 Filtrer par départ">
+      <input id="rechDest" placeholder="🔍 Filtrer par destination">
+    </div>
+    <div id="trajets"></div>
+  </section>
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/13.3.0/firebase-app.js";
     import {
-      getFirestore, collection, addDoc, doc,
+      getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword,
+      signOut, onAuthStateChanged
+    } from "https://www.gstatic.com/firebasejs/13.3.0/firebase-auth.js";
+    import {
+      getFirestore, collection, addDoc, doc, getDoc, setDoc,
       deleteDoc, onSnapshot, runTransaction
     } from "https://www.gstatic.com/firebasejs/13.3.0/firebase-firestore.js";
 
@@ -45,13 +79,19 @@
     };
 
     const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
     const db = getFirestore(app);
     const trajetsRef = collection(db, "trajets");
 
-    const trajetsDiv = document.getElementById("trajets");
-    const rechDepart = document.getElementById("rechDepart");
-    const rechDest = document.getElementById("rechDest");
+    const $ = function (id) { return document.getElementById(id); };
+
+    let modeInscription = false;
+    let roleChoisi = "passager";
+    let profilEnCours = null;
+    let utilisateur = null;
+    let profil = null;
     let trajets = [];
+    let stopTrajets = null;
 
     function jour(d) {
       const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -59,7 +99,7 @@
       return d.getFullYear() + "-" + m + "-" + j;
     }
 
-    document.getElementById("date").min = jour(new Date());
+    $("date").min = jour(new Date());
 
     function ligne(texte, gras) {
       const d = document.createElement("div");
@@ -68,10 +108,116 @@
       return d;
     }
 
+    function messageErreur(e) {
+      const c = e.code || "";
+      if (c === "auth/invalid-credential" || c === "auth/wrong-password" || c === "auth/user-not-found") {
+        return "Email wala mot de passe ghalet";
+      }
+      if (c === "auth/email-already-in-use") return "Hedha el email mawjoud, jarreb Connexion";
+      if (c === "auth/weak-password") return "El mot de passe lazem 6 7orouf 3al a9all";
+      if (c === "auth/invalid-email") return "El email mouch s7i7";
+      if (c === "auth/network-request-failed") return "Mochkla fil internet";
+      return "Erreur: " + (e.message || c);
+    }
+
+    function afficherOnglet(inscription) {
+      modeInscription = inscription;
+      $("ongConnexion").classList.toggle("actif", !inscription);
+      $("ongInscription").classList.toggle("actif", inscription);
+      $("blocInscription").hidden = !inscription;
+      $("btnAuth").textContent = inscription ? "Créer mon compte" : "Se connecter";
+      $("msgAuth").textContent = "";
+    }
+
+    $("ongConnexion").onclick = function () { afficherOnglet(false); };
+    $("ongInscription").onclick = function () { afficherOnglet(true); };
+
+    document.querySelectorAll(".role").forEach(function (b) {
+      b.onclick = function () {
+        roleChoisi = b.dataset.role;
+        document.querySelectorAll(".role").forEach(function (x) {
+          x.classList.toggle("actif", x === b);
+        });
+      };
+    });
+
+    $("btnAuth").onclick = async function () {
+      const email = $("inEmail").value.trim();
+      const mdp = $("inMdp").value;
+      const msg = $("msgAuth");
+      const btn = $("btnAuth");
+      msg.textContent = "";
+
+      if (!email || !mdp) {
+        msg.textContent = "3ammer el email w el mot de passe";
+        return;
+      }
+
+      btn.disabled = true;
+      try {
+        if (modeInscription) {
+          const nom = $("inNom").value.trim();
+          const tel = $("inTel").value.trim();
+          if (!nom || !tel) {
+            msg.textContent = "3ammer el esm w el téléphone";
+            btn.disabled = false;
+            return;
+          }
+          profilEnCours = { nom: nom, tel: tel, role: roleChoisi };
+          const cred = await createUserWithEmailAndPassword(auth, email, mdp);
+          await setDoc(doc(db, "users", cred.user.uid), profilEnCours);
+        } else {
+          await signInWithEmailAndPassword(auth, email, mdp);
+        }
+      } catch (e) {
+        msg.textContent = messageErreur(e);
+      }
+      btn.disabled = false;
+    };
+
+    $("btnDeconnexion").onclick = function () { signOut(auth); };
+
+    function montrerAuth() {
+      if (stopTrajets) { stopTrajets(); stopTrajets = null; }
+      trajets = [];
+      $("inMdp").value = "";
+      $("chargement").hidden = true;
+      $("vueApp").hidden = true;
+      $("vueAuth").hidden = false;
+    }
+
+    function montrerApp() {
+      $("chargement").hidden = true;
+      $("vueAuth").hidden = true;
+      $("vueApp").hidden = false;
+      $("msgAuth").textContent = "";
+
+      const conducteur = profil.role === "conducteur";
+      $("salut").textContent = (conducteur ? "🚗 " : "🧳 ") + profil.nom +
+        " · " + (conducteur ? "Conducteur" : "Passager");
+      $("formTrajet").hidden = !conducteur;
+
+      if (stopTrajets) stopTrajets();
+      stopTrajets = onSnapshot(
+        trajetsRef,
+        function (snap) {
+          trajets = snap.docs.map(function (d) {
+            return Object.assign({ id: d.id }, d.data());
+          });
+          afficher();
+        },
+        function (err) {
+          $("trajets").textContent = "Erreur de connexion: " + err.message;
+        }
+      );
+    }
+
     function afficher() {
+      if (!utilisateur || !profil) return;
+      const trajetsDiv = $("trajets");
       const aujourdhui = jour(new Date());
-      const fd = rechDepart.value.trim().toLowerCase();
-      const ft = rechDest.value.trim().toLowerCase();
+      const fd = $("rechDepart").value.trim().toLowerCase();
+      const ft = $("rechDest").value.trim().toLowerCase();
       trajetsDiv.innerHTML = "";
 
       const visibles = trajets
@@ -85,6 +231,12 @@
         });
 
       visibles.forEach(function (t) {
+        const estProprio = t.uid === utilisateur.uid;
+        const passagers = t.passagers || [];
+        const dejaReserve = passagers.some(function (p) {
+          return p.uid === utilisateur.uid;
+        });
+
         const carte = document.createElement("div");
         carte.className = "carte";
 
@@ -93,34 +245,49 @@
         if (t.nom) infos.appendChild(ligne("👤 " + t.nom));
         infos.appendChild(ligne("📅 " + t.date));
         infos.appendChild(ligne("💺 " + t.places + " place(s) · 💰 " + t.prix + " DT"));
+        if (estProprio && passagers.length > 0) {
+          const p = ligne("👥 Réservé par: " + passagers.map(function (x) { return x.nom; }).join(", "));
+          p.className = "passagers";
+          infos.appendChild(p);
+        }
 
         const actions = document.createElement("div");
         actions.className = "actions";
 
-        const res = document.createElement("button");
-        res.className = "reserver";
-        if (t.places > 0) {
-          res.textContent = "Réserver";
-          res.onclick = async function () {
-            try {
-              await runTransaction(db, async function (tx) {
-                const ref = doc(db, "trajets", t.id);
-                const snap = await tx.get(ref);
-                if (!snap.exists()) return;
-                const p = snap.data().places;
-                if (p > 0) tx.update(ref, { places: p - 1 });
-              });
-            } catch (e) {
-              alert("Erreur: " + e.message);
-            }
-          };
-        } else {
-          res.textContent = "Complet";
-          res.disabled = true;
+        if (profil.role === "passager") {
+          const res = document.createElement("button");
+          res.className = "reserver";
+          if (dejaReserve) {
+            res.textContent = "✅ Réservé";
+            res.disabled = true;
+          } else if (t.places > 0) {
+            res.textContent = "Réserver";
+            res.onclick = async function () {
+              try {
+                await runTransaction(db, async function (tx) {
+                  const ref = doc(db, "trajets", t.id);
+                  const snap = await tx.get(ref);
+                  if (!snap.exists()) return;
+                  const d = snap.data();
+                  const liste = d.passagers || [];
+                  const deja = liste.some(function (p) { return p.uid === utilisateur.uid; });
+                  if (d.places > 0 && !deja) {
+                    liste.push({ uid: utilisateur.uid, nom: profil.nom });
+                    tx.update(ref, { places: d.places - 1, passagers: liste });
+                  }
+                });
+              } catch (e) {
+                alert("Erreur: " + e.message);
+              }
+            };
+          } else {
+            res.textContent = "Complet";
+            res.disabled = true;
+          }
+          actions.appendChild(res);
         }
-        actions.appendChild(res);
 
-        if (t.tel) {
+        if (t.tel && !estProprio) {
           const appel = document.createElement("a");
           appel.className = "appeler";
           appel.textContent = "📞 Appeler";
@@ -128,18 +295,20 @@
           actions.appendChild(appel);
         }
 
-        const del = document.createElement("button");
-        del.textContent = "❌";
-        del.className = "suppr";
-        del.onclick = async function () {
-          if (!confirm("Supprimer ce trajet ?")) return;
-          try {
-            await deleteDoc(doc(db, "trajets", t.id));
-          } catch (e) {
-            alert("Erreur: " + e.message);
-          }
-        };
-        actions.appendChild(del);
+        if (estProprio) {
+          const del = document.createElement("button");
+          del.textContent = "❌";
+          del.className = "suppr";
+          del.onclick = async function () {
+            if (!confirm("Supprimer ce trajet ?")) return;
+            try {
+              await deleteDoc(doc(db, "trajets", t.id));
+            } catch (e) {
+              alert("Erreur: " + e.message);
+            }
+          };
+          actions.appendChild(del);
+        }
 
         carte.appendChild(infos);
         carte.appendChild(actions);
@@ -151,49 +320,38 @@
       }
     }
 
-    onSnapshot(
-      trajetsRef,
-      function (snap) {
-        trajets = snap.docs.map(function (d) {
-          return Object.assign({ id: d.id }, d.data());
-        });
-        afficher();
-      },
-      function (err) {
-        trajetsDiv.textContent = "Erreur de connexion: " + err.message;
-      }
-    );
+    $("publier").onclick = async function () {
+      if (!utilisateur || !profil || profil.role !== "conducteur") return;
 
-    document.getElementById("publier").onclick = async function () {
-      const nom = document.getElementById("nom").value.trim();
-      const tel = document.getElementById("tel").value.trim();
-      const depart = document.getElementById("depart").value.trim();
-      const destination = document.getElementById("destination").value.trim();
-      const date = document.getElementById("date").value;
-      const places = document.getElementById("places").value;
-      const prix = document.getElementById("prix").value;
+      const depart = $("depart").value.trim();
+      const destination = $("destination").value.trim();
+      const date = $("date").value;
+      const places = $("places").value;
+      const prix = $("prix").value;
 
-      if (!nom || !tel || !depart || !destination || !date || !places || !prix) {
-        alert("Lazem tعammer kol el khanat");
+      if (!depart || !destination || !date || !places || !prix) {
+        alert("Lazem t3ammer kol el khanat");
         return;
       }
 
       if (date < jour(new Date())) {
-        alert("El date lazem tكون lyoum wala baad");
+        alert("El date lazem tkoun lyoum wala baad");
         return;
       }
 
       try {
         await addDoc(trajetsRef, {
-          nom: nom,
-          tel: tel,
+          uid: utilisateur.uid,
+          nom: profil.nom,
+          tel: profil.tel,
           depart: depart,
           destination: destination,
           date: date,
           places: Number(places),
-          prix: Number(prix)
+          prix: Number(prix),
+          passagers: []
         });
-        document.querySelectorAll(".form input").forEach(function (el) {
+        document.querySelectorAll("#formTrajet input").forEach(function (el) {
           el.value = "";
         });
       } catch (e) {
@@ -201,8 +359,29 @@
       }
     };
 
-    rechDepart.oninput = afficher;
-    rechDest.oninput = afficher;
+    $("rechDepart").oninput = afficher;
+    $("rechDest").oninput = afficher;
+
+    onAuthStateChanged(auth, async function (user) {
+      utilisateur = user;
+      if (!user) {
+        profil = null;
+        montrerAuth();
+        return;
+      }
+      try {
+        const snap = await getDoc(doc(db, "users", user.uid));
+        profil = snap.exists() ? snap.data() : profilEnCours;
+      } catch (e) {
+        profil = profilEnCours;
+      }
+      if (!profil) {
+        await signOut(auth);
+        $("msgAuth").textContent = "Profil introuvable, 3awed el inscription";
+        return;
+      }
+      montrerApp();
+    });
   </script>
 </body>
 </html>
